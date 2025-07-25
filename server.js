@@ -25,27 +25,26 @@ mongoose
   .then(() => console.log("Connected to MongoDB"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-// Configure ytdl-core with browser-like request headers to avoid bot detection
-ytdl.setGlobalOptions({
-  requestOptions: {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
-      Connection: "keep-alive",
-      "Sec-Fetch-Dest": "document",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "none",
-      "Sec-Fetch-User": "?1",
-      "Upgrade-Insecure-Requests": "1",
-      Cookie: process.env.YOUTUBE_COOKIES || "", // Optional: Store cookies in env var if needed
-    },
-    agent: new https.Agent({ keepAlive: true }),
+// Configure browser-like request headers to avoid YouTube bot detection
+// @distube/ytdl-core doesn't have setGlobalOptions, we'll apply these options on each request
+const requestOptions = {
+  headers: {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+    Accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    Connection: "keep-alive",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    Cookie: process.env.YOUTUBE_COOKIES || "", // Optional: Store cookies in env var if needed
   },
-});
+  agent: new https.Agent({ keepAlive: true }),
+};
 
 // Create downloads directory if it doesn't exist
 const downloadsDir = path.join(__dirname, "downloads");
@@ -68,7 +67,8 @@ app.post("/api/video-info", async (req, res) => {
 
     while (retries > 0) {
       try {
-        info = await ytdl.getInfo(url);
+        // Pass the requestOptions directly to getInfo
+        info = await ytdl.getInfo(url, { requestOptions });
         break; // Success, exit the loop
       } catch (error) {
         if (retries === 1 || !error.message.includes("Sign in to confirm")) {
@@ -118,7 +118,8 @@ app.get("/api/download", async (req, res) => {
 
     while (retries > 0) {
       try {
-        info = await ytdl.getInfo(url);
+        // Pass the requestOptions directly to getInfo
+        info = await ytdl.getInfo(url, { requestOptions });
         break; // Success, exit the loop
       } catch (error) {
         if (retries === 1 || !error.message.includes("Sign in to confirm")) {
@@ -169,10 +170,14 @@ app.get("/api/download", async (req, res) => {
 
       // Use @distube/ytdl-core's built-in filtering for audio-only streams
       const audioStream = selectedAudioFormat
-        ? ytdl.downloadFromInfo(info, { format: selectedAudioFormat })
+        ? ytdl.downloadFromInfo(info, {
+            format: selectedAudioFormat,
+            requestOptions,
+          })
         : ytdl(url, {
             quality: "highestaudio",
             filter: "audioonly",
+            requestOptions,
           });
 
       // Calculate total content length if possible
@@ -183,6 +188,7 @@ app.get("/api/download", async (req, res) => {
           ytdl.chooseFormat(info.formats, {
             quality: "highestaudio",
             filter: "audioonly",
+            requestOptions,
           });
         if (audioFormat && audioFormat.contentLength) {
           contentLength = parseInt(audioFormat.contentLength, 10);
@@ -243,10 +249,14 @@ app.get("/api/download", async (req, res) => {
       let selectedFormat = formats.length > 0 ? formats[0] : null;
 
       const videoStream = selectedFormat
-        ? ytdl.downloadFromInfo(info, { format: selectedFormat })
+        ? ytdl.downloadFromInfo(info, {
+            format: selectedFormat,
+            requestOptions,
+          })
         : ytdl(url, {
             quality: qualityOption,
             filter: "videoandaudio",
+            requestOptions,
           });
 
       // Calculate total content length if possible
@@ -258,6 +268,7 @@ app.get("/api/download", async (req, res) => {
           ytdl.chooseFormat(info.formats, {
             quality: qualityOption,
             filter: "videoandaudio",
+            requestOptions,
           });
         if (videoFormat && videoFormat.contentLength) {
           contentLength = parseInt(videoFormat.contentLength, 10);
