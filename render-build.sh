@@ -1,7 +1,11 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
-apt-get update
-apt-get install -y curl ffmpeg
+echo "Running build steps..."
 
-curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-chmod a+rx /usr/local/bin/yt-dlp
+# Make yt-dlp executable if it's in the repo
+chmod +x yt-dlp
+
+# Install Node.js dependencies
+npm install
+
+echo "Build complete ✅"
