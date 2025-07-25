@@ -6,6 +6,7 @@ const ytdl = require("@distube/ytdl-core");
 const fs = require("fs");
 const path = require("path");
 const Download = require("./models/Download");
+const https = require("https");
 
 dotenv.config();
 
@@ -24,6 +25,28 @@ mongoose
   .then(() => console.log("Connected to MongoDB"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
+// Configure ytdl-core with browser-like request headers to avoid bot detection
+ytdl.setGlobalOptions({
+  requestOptions: {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      Connection: "keep-alive",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-User": "?1",
+      "Upgrade-Insecure-Requests": "1",
+      Cookie: process.env.YOUTUBE_COOKIES || "", // Optional: Store cookies in env var if needed
+    },
+    agent: new https.Agent({ keepAlive: true }),
+  },
+});
+
 // Create downloads directory if it doesn't exist
 const downloadsDir = path.join(__dirname, "downloads");
 if (!fs.existsSync(downloadsDir)) {
@@ -39,7 +62,27 @@ app.post("/api/video-info", async (req, res) => {
       return res.status(400).json({ message: "Invalid YouTube URL" });
     }
 
-    const info = await ytdl.getInfo(url);
+    // Add retry logic with exponential backoff
+    let retries = 3;
+    let info;
+
+    while (retries > 0) {
+      try {
+        info = await ytdl.getInfo(url);
+        break; // Success, exit the loop
+      } catch (error) {
+        if (retries === 1 || !error.message.includes("Sign in to confirm")) {
+          // Last retry or different error, rethrow
+          throw error;
+        }
+        console.log(`Retry attempt left: ${retries - 1} for URL: ${url}`);
+        retries--;
+        // Wait before retry (exponential backoff: 2s, 4s, 8s...)
+        await new Promise((resolve) =>
+          setTimeout(resolve, 2000 * Math.pow(2, 3 - retries))
+        );
+      }
+    }
 
     const videoInfo = {
       url,
@@ -69,7 +112,27 @@ app.get("/api/download", async (req, res) => {
       return res.status(400).json({ message: "Invalid YouTube URL" });
     }
 
-    const info = await ytdl.getInfo(url);
+    // Add retry logic with exponential backoff
+    let retries = 3;
+    let info;
+
+    while (retries > 0) {
+      try {
+        info = await ytdl.getInfo(url);
+        break; // Success, exit the loop
+      } catch (error) {
+        if (retries === 1 || !error.message.includes("Sign in to confirm")) {
+          // Last retry or different error, rethrow
+          throw error;
+        }
+        console.log(`Retry attempt left: ${retries - 1} for URL: ${url}`);
+        retries--;
+        // Wait before retry (exponential backoff: 2s, 4s, 8s...)
+        await new Promise((resolve) =>
+          setTimeout(resolve, 2000 * Math.pow(2, 3 - retries))
+        );
+      }
+    }
     const videoTitle = info.videoDetails.title.replace(/[^\w\s-]/gi, "").trim();
 
     // Create a new download record
@@ -154,6 +217,11 @@ app.get("/api/download", async (req, res) => {
       res.setHeader("Content-Type", "video/mp4");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Transfer-Encoding", "chunked");
+
+      // Add proxy-specific headers to prevent caching issues
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
 
       // Select quality based on user choice with improved quality selection
       const qualityOption =

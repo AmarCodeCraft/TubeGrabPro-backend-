@@ -35,12 +35,27 @@ A powerful Node.js backend service for downloading YouTube videos and audio file
 npm install
 ```
 
-3. Create a `.env` file in the root directory with the following variables:
+3. Create a `.env` file in the root directory (use .env.example as a template):
 
 ```
 PORT=5000
 MONGO_URI=your_mongodb_connection_string
+YOUTUBE_COOKIES=your_youtube_cookies_here
 ```
+
+### Handling YouTube Bot Detection
+
+This application uses strategies to bypass YouTube's bot detection:
+
+1. Browser-like request headers
+2. Retry mechanism with exponential backoff
+3. Optional YouTube cookies for authenticated requests
+
+If you encounter the "Sign in to confirm you're not a bot" error:
+
+1. Log into YouTube in your browser
+2. Use browser developer tools to copy your cookies
+3. Add them to the YOUTUBE_COOKIES environment variable
 
 ## API Endpoints
 
