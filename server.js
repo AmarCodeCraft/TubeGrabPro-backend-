@@ -14,7 +14,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+app.use(cors("*"));
 app.use(express.json());
 
 // Connect to MongoDB
@@ -41,9 +41,9 @@ const requestOptions = {
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-User": "?1",
     "Upgrade-Insecure-Requests": "1",
-    Cookie: process.env.YOUTUBE_COOKIES || "", // Optional: Store cookies in env var if needed
+    // Removed Cookie header as per request
   },
-  agent: new https.Agent({ keepAlive: true }),
+  // Removed agent option which was causing the error
 };
 
 // Create downloads directory if it doesn't exist
