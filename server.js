@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const ytdl = require("@distube/ytdl-core");
+const youtubedl = require("youtube-dl-exec");
 const fs = require("fs");
 const path = require("path");
 const Download = require("./models/Download");
@@ -44,7 +45,8 @@ const baseHeaders = {
   "sec-fetch-site": "none",
   "sec-fetch-user": "?1",
   "upgrade-insecure-requests": "1",
-  // NOTE: no cookies
+  // Use cookies to help bypass bot detection
+  cookie: process.env.YOUTUBE_COOKIES || "",
 };
 
 /* ---------- Downloads dir ---------- */
@@ -64,6 +66,49 @@ function formatDuration(seconds) {
 function bestThumb(thumbnails = []) {
   if (!thumbnails.length) return null;
   return thumbnails[thumbnails.length - 1].url; // last is usually highest res
+}
+
+/**
+ * Fallback function using youtube-dl-exec when ytdl-core fails
+ */
+async function getInfoFallback(url) {
+  try {
+    console.log("Trying fallback method with youtube-dl-exec...");
+
+    const info = await youtubedl(url, {
+      dumpSingleJson: true,
+      noCheckCertificates: true,
+      noWarnings: true,
+      format: "best[ext=mp4]",
+      addHeader: [
+        "referer:youtube.com",
+        "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+      ],
+    });
+
+    // Convert youtube-dl-exec format to ytdl-core format
+    return {
+      videoDetails: {
+        videoId: info.id,
+        title: info.title,
+        author: { name: info.uploader || info.channel || "Unknown" },
+        thumbnails: info.thumbnails || [{ url: info.thumbnail }],
+        lengthSeconds: info.duration || 0,
+      },
+      formats: info.formats
+        ? info.formats.map((f) => ({
+            itag: f.format_id,
+            qualityLabel: f.height ? `${f.height}p` : null,
+            mimeType: f.ext ? `video/${f.ext}` : "video/mp4",
+            hasVideo: !!f.vcodec && f.vcodec !== "none",
+            hasAudio: !!f.acodec && f.acodec !== "none",
+            url: f.url,
+          }))
+        : [],
+    };
+  } catch (error) {
+    throw new Error(`Fallback method also failed: ${error.message}`);
+  }
 }
 
 /**
@@ -115,17 +160,6 @@ async function getInfoResilient(url, { timeoutMs = 30000, tries = 5 } = {}) {
           headers: {
             ...baseHeaders,
             "user-agent": userAgent,
-            // Add some randomization to headers
-            "x-forwarded-for": `${Math.floor(Math.random() * 255)}.${Math.floor(
-              Math.random() * 255
-            )}.${Math.floor(Math.random() * 255)}.${Math.floor(
-              Math.random() * 255
-            )}`,
-            "x-real-ip": `${Math.floor(Math.random() * 255)}.${Math.floor(
-              Math.random() * 255
-            )}.${Math.floor(Math.random() * 255)}.${Math.floor(
-              Math.random() * 255
-            )}`,
           },
           signal: controller.signal,
         },
@@ -161,6 +195,28 @@ async function getInfoResilient(url, { timeoutMs = 30000, tries = 5 } = {}) {
   throw lastErr;
 }
 
+/**
+ * Main function that tries ytdl-core first, then fallback to youtube-dl-exec
+ */
+async function getVideoInfo(url) {
+  try {
+    // First try ytdl-core with resilient strategy
+    return await getInfoResilient(url);
+  } catch (error) {
+    console.log("ytdl-core failed, trying fallback method...", error.message);
+
+    // If ytdl-core fails, try youtube-dl-exec as fallback
+    try {
+      return await getInfoFallback(url);
+    } catch (fallbackError) {
+      console.error("Both methods failed:", fallbackError.message);
+      throw new Error(
+        `All methods failed. ytdl-core: ${error.message}, fallback: ${fallbackError.message}`
+      );
+    }
+  }
+}
+
 /* ---------- Routes ---------- */
 app.post("/api/video-info", async (req, res) => {
   try {
@@ -169,7 +225,7 @@ app.post("/api/video-info", async (req, res) => {
       return res.status(400).json({ message: "Invalid YouTube URL" });
     }
 
-    const info = await getInfoResilient(url);
+    const info = await getVideoInfo(url);
 
     const videoInfo = {
       url,
@@ -217,7 +273,7 @@ app.get("/api/download", async (req, res) => {
       return res.status(400).json({ message: "Invalid YouTube URL" });
     }
 
-    const info = await getInfoResilient(url);
+    const info = await getVideoInfo(url);
 
     const rawTitle = info.videoDetails.title || "video";
     const safeTitle = rawTitle.replace(/[^\w\s-]/gi, "").trim() || "video";
