@@ -33,10 +33,17 @@ mongoose
 /* ---------- Request headers (browser-like) ---------- */
 const baseHeaders = {
   "user-agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
   accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
   "accept-language": "en-US,en;q=0.9",
+  "accept-encoding": "gzip, deflate, br",
+  "cache-control": "no-cache",
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "none",
+  "sec-fetch-user": "?1",
+  "upgrade-insecure-requests": "1",
   // NOTE: no cookies
 };
 
@@ -60,37 +67,97 @@ function bestThumb(thumbnails = []) {
 }
 
 /**
- * getInfo with:
- *  - client rotation (WEB → ANDROID → MWEB)
- *  - timeout (default 12s)
- *  - simple retry (3 attempts total)
- *  - cookie-less requestOptions
+ * Enhanced getInfo with multiple strategies to avoid bot detection
  */
-async function getInfoResilient(url, { timeoutMs = 12000, tries = 3 } = {}) {
-  const clients = ["WEB", "ANDROID", "MWEB"];
+async function getInfoResilient(url, { timeoutMs = 30000, tries = 5 } = {}) {
+  // Multiple client types and configurations to try
+  const strategies = [
+    { client: "WEB", lang: "en-US" },
+    { client: "ANDROID", lang: "en-US" },
+    { client: "MWEB", lang: "en-US" },
+    { client: "TVHTML5", lang: "en-US" },
+    { client: "WEB", lang: "en-GB" },
+  ];
+
+  // Different user agents to rotate through
+  const userAgents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+  ];
+
   let lastErr;
+  let strategyIndex = 0;
 
   for (let attempt = 1; attempt <= tries; attempt++) {
-    for (const client of clients) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const strategy = strategies[strategyIndex % strategies.length];
+    const userAgent = userAgents[strategyIndex % userAgents.length];
 
-      try {
-        const info = await ytdl.getInfo(url, {
-          client,
-          requestOptions: {
-            headers: baseHeaders,
-            signal: controller.signal,
-          },
-        });
-        clearTimeout(timer);
-        return info;
-      } catch (e) {
-        clearTimeout(timer);
-        lastErr = e;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      console.log(
+        `Attempt ${attempt}/${tries} using ${strategy.client} client`
+      );
+
+      // Add random delay between attempts to appear more human-like
+      if (attempt > 1) {
+        const delay = Math.random() * 2000 + 1000; // 1-3 seconds
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
+
+      const info = await ytdl.getInfo(url, {
+        lang: strategy.lang,
+        client: strategy.client,
+        requestOptions: {
+          headers: {
+            ...baseHeaders,
+            "user-agent": userAgent,
+            // Add some randomization to headers
+            "x-forwarded-for": `${Math.floor(Math.random() * 255)}.${Math.floor(
+              Math.random() * 255
+            )}.${Math.floor(Math.random() * 255)}.${Math.floor(
+              Math.random() * 255
+            )}`,
+            "x-real-ip": `${Math.floor(Math.random() * 255)}.${Math.floor(
+              Math.random() * 255
+            )}.${Math.floor(Math.random() * 255)}.${Math.floor(
+              Math.random() * 255
+            )}`,
+          },
+          signal: controller.signal,
+        },
+      });
+
+      clearTimeout(timer);
+      console.log(`Successfully fetched info using ${strategy.client} client`);
+      return info;
+    } catch (e) {
+      clearTimeout(timer);
+      console.error(
+        `Attempt ${attempt} failed with ${strategy.client}:`,
+        e.message
+      );
+      lastErr = e;
+
+      // If it's bot detection, wait longer before next attempt
+      if (
+        e.message.includes("Sign in to confirm") ||
+        e.message.includes("not a bot")
+      ) {
+        const backoffDelay = Math.min(2000 * Math.pow(2, attempt), 15000); // Max 15 seconds
+        console.log(
+          `Bot detection encountered, waiting ${backoffDelay}ms before next attempt`
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoffDelay));
+      }
+
+      strategyIndex++;
     }
   }
+
   throw lastErr;
 }
 
@@ -110,7 +177,9 @@ app.post("/api/video-info", async (req, res) => {
       title: info.videoDetails.title,
       author: info.videoDetails.author?.name || "",
       thumbnail: bestThumb(info.videoDetails.thumbnails),
-      duration: formatDuration(parseInt(info.videoDetails.lengthSeconds || "0")),
+      duration: formatDuration(
+        parseInt(info.videoDetails.lengthSeconds || "0")
+      ),
       formats: info.formats.map((f) => ({
         itag: f.itag,
         quality: f.qualityLabel || null,
@@ -165,7 +234,10 @@ app.get("/api/download", async (req, res) => {
     /* ---------- AUDIO ---------- */
     if (format === "audio") {
       const fileName = `${safeTitle}.mp3`;
-      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
       res.setHeader("Content-Type", "audio/mpeg");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Transfer-Encoding", "chunked");
